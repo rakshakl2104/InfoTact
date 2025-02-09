@@ -1,0 +1,192 @@
+import streamlit as st
+import sqlite3
+import requests
+import re
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Database setup
+def setup_database():
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            dob TEXT NOT NULL,
+            country TEXT NOT NULL,
+            password TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+# Sign-up functionality
+def signup(name, dob, country, password):
+    if not name or not dob or not country or not password:
+        st.error("All fields are required for sign-up!")
+        return
+
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO users (name, dob, country, password) VALUES (?, ?, ?, ?)", (name, dob, country, password))
+    conn.commit()
+    conn.close()
+
+    st.success(f"Sign-up successful! Your User ID is {name}. Please use this name to log in.")
+
+# Login functionality
+def login(user_name, password):
+    if not user_name or not password:
+        st.error("Both Name and Password are required to log in!")
+        return False
+
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE name = ? AND password = ?", (user_name, password))
+    user = cursor.fetchone()
+    conn.close()
+
+    if user:
+        st.success(f"Welcome {user[1]} from {user[3]}!")
+        return True
+    else:
+        st.error("Invalid Name or Password!")
+        return False
+
+# Real-time currency converter class
+class RealTimeCurrencyConverter():
+    def __init__(self, url):
+        self.data = requests.get(url).json()
+        self.currencies = self.data['rates']
+
+    def convert(self, from_currency, to_currency, amount):
+        initial_amount = amount
+        if from_currency != 'USD':
+            amount = amount / self.currencies[from_currency]
+        # Limiting the precision to 4 decimal places
+        amount = round(amount * self.currencies[to_currency], 4)
+        return amount
+
+    def get_exchange_rate(self, from_currency, to_currency):
+        if from_currency == to_currency:
+            return 1
+        elif from_currency == 'USD':
+            return self.currencies[to_currency]
+        elif to_currency == 'USD':
+            return 1 / self.currencies[from_currency]
+        else:
+            return self.currencies[to_currency] / self.currencies[from_currency]
+
+# Initialize converter
+url = 'https://api.exchangerate-api.com/v4/latest/USD'
+converter = RealTimeCurrencyConverter(url)
+
+# Show currency converter
+def show_currency_converter():
+    st.title("Real Time Currency Converter")
+    st.write("Convert currencies in real-time.")
+
+    amount = st.text_input("Enter amount", value="", help="Only numeric values are allowed")
+    from_currency = st.selectbox("From Currency", options=list(converter.currencies.keys()), index=list(converter.currencies.keys()).index("INR"))
+    to_currency = st.selectbox("To Currency", options=list(converter.currencies.keys()), index=list(converter.currencies.keys()).index("USD"))
+
+    def is_valid_number(value):
+        regex = re.compile(r"^[0-9]*(\\.[0-9]*)?$")
+        return bool(regex.match(value))
+
+    if st.button("Convert"):
+        if not is_valid_number(amount):
+            st.error("Please enter a valid numeric amount.")
+        else:
+            try:
+                amount = float(amount)
+                converted_amount = converter.convert(from_currency, to_currency, amount)
+                st.success(f"Converted Amount: {converted_amount} {to_currency}")
+            except Exception as e:
+                st.error(f"An error occurred: {e}")
+
+# Visualize exchange rates
+def visualize_exchange_rate():
+    st.title("Visualize Exchange Rates")
+    st.write("Analyze the exchange rate of selected currencies.")
+
+    from_currency = st.selectbox("From Currency", options=list(converter.currencies.keys()), index=list(converter.currencies.keys()).index("INR"), key="from_currency_visual")
+    to_currency = st.selectbox("To Currency", options=list(converter.currencies.keys()), index=list(converter.currencies.keys()).index("USD"), key="to_currency_visual")
+
+    if st.button("Show Exchange Rate"):
+        try:
+            exchange_rate = converter.get_exchange_rate(from_currency, to_currency)
+            st.write(f"Current exchange rate from {from_currency} to {to_currency}: {exchange_rate}")
+
+            rates = {currency: converter.get_exchange_rate(from_currency, currency) for currency in converter.currencies.keys()}
+            df = pd.DataFrame(list(rates.items()), columns=['Currency', 'Exchange Rate'])
+
+            fig, ax = plt.subplots(figsize=(10, 30))  # Adjusting the figure size for better visibility
+            df = df.sort_values(by='Exchange Rate', ascending=False)
+            ax.barh(df['Currency'], df['Exchange Rate'], color='skyblue')
+            ax.set_xlabel('Exchange Rate')
+            ax.set_ylabel('Currency')
+            ax.set_title(f'Exchange Rate of {from_currency} Against Other Currencies')
+            plt.tight_layout()  # Ensure proper spacing
+            st.pyplot(fig)
+
+        except Exception as e:
+            st.error(f"An error occurred: {e}")
+
+# Initialize database
+setup_database()
+
+# Streamlit UI
+st.set_page_config(page_title="Currency Converter App", layout="centered")
+
+# Session state for login
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+
+if not st.session_state.logged_in:
+    page = st.sidebar.radio("Navigation", ["Sign Up", "Log In"])
+
+    if page == "Sign Up":
+        st.header("Sign Up")
+        name = st.text_input("Name")
+        dob = st.text_input("Date of Birth (YYYY-MM-DD)")
+        country = st.text_input("Country")
+        password = st.text_input("Password", type="password")
+
+        if st.button("Sign Up"):
+            signup(name, dob, country, password)
+
+    elif page == "Log In":
+        st.header("Log In")
+        user_name = st.text_input("Name")
+        password = st.text_input("Password", type="password")
+
+        if st.button("Log In"):
+            if login(user_name, password):
+                st.session_state.logged_in = True
+                st.experimental_rerun()
+else:
+    page = st.sidebar.radio("Navigation", ["Currency Converter", "Visualize", "Database"])
+
+    if page == "Currency Converter":
+        show_currency_converter()
+    elif page == "Visualize":
+        visualize_exchange_rate()
+    elif page == "Database":
+        st.title("User Database")
+        st.write("View and download user data.")
+
+        conn = sqlite3.connect("users.db")
+        df = pd.read_sql_query("SELECT * FROM users", conn)
+        conn.close()
+
+        st.dataframe(df)
+
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Download data as CSV",
+            data=csv,
+            file_name="user_data.csv",
+            mime="text/csv",
+        )
